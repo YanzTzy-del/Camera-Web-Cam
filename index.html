@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ultra Live Photo iPhone Realistic</title>
+<style>
+body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; padding: 20px; background: #f0f0f0; }
+video, canvas { border: 1px solid #ccc; border-radius: 8px; margin-top: 10px; max-width: 100%; }
+button { margin-top: 15px; padding: 10px 20px; font-size: 16px; cursor: pointer; border-radius: 5px; }
+#liveGIF, #livePhoto { margin-top: 10px; border: 1px solid #ccc; border-radius: 8px; display: none; }
+#flash { position: fixed; top:0; left:0; width:100%; height:100%; background:white; display:none; opacity:0; z-index:1000; transition: opacity 0.2s; }
+</style>
+</head>
+<body>
+<h2>Ultra Live Photo iPhone Realistic</h2>
+<div id="flash"></div>
+<video id="player" autoplay muted playsinline width="1080" height="1920"></video>
+<canvas id="canvas" width="1080" height="1920" style="display:none;"></canvas>
+<div>
+<button id="capture">Ambil Live Photo</button>
+<button id="download" style="display:none;">Download GIF</button>
+</div>
+<img id="liveGIF" alt="Live Photo GIF" width="540"/>
+<video id="livePhoto" controls width="540" style="display:none;"></video>
+
+<script src="https://cdn.jsdelivr.net/npm/gif.js.optimized/dist/gif.worker.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/gif.js.optimized/dist/gif.js"></script>
+
+<script>
+const player = document.getElementById('player');
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const captureButton = document.getElementById('capture');
+const downloadBtn = document.getElementById('download');
+const liveGIF = document.getElementById('liveGIF');
+const livePhoto = document.getElementById('livePhoto');
+const flash = document.getElementById('flash');
+
+let ringBuffer = [];
+const fps = 30;
+const preSeconds = 1.5;
+const postSeconds = 1.5;
+const preFrames = Math.floor(preSeconds * fps);
+const postFrames = Math.floor(postSeconds * fps);
+
+// Filter ala iPhone
+function applyFilter(frame) {
+    const data = frame.data;
+    for(let i=0;i<data.length;i+=4){
+        // tone natural: sedikit kontras & saturasi
+        data[i] = Math.min(255, data[i]*1.05);     // R
+        data[i+1] = Math.min(255, data[i+1]*1.02); // G
+        data[i+2] = Math.min(255, data[i+2]*1.05); // B
+    }
+    return frame;
+}
+
+// Stabilisasi sederhana
+let prevFrame = null;
+function stabilizeFrame(frame) {
+    if(!prevFrame) { prevFrame = frame; return frame; }
+    const newFrame = new ImageData(frame.width, frame.height);
+    for(let i=0;i<frame.data.length;i++){
+        newFrame.data[i] = (frame.data[i]+prevFrame.data[i])/2;
+    }
+    prevFrame = frame;
+    return newFrame;
+}
+
+// Akses kamera Full HD
+navigator.mediaDevices.getUserMedia({ video: { facingMode: { exact: "environment" }, width: 1920, height: 1080 } })
+.then(stream => {
+    player.srcObject = stream;
+
+    // Ring buffer pre-capture
+    setInterval(() => {
+        ctx.drawImage(player, 0, 0, canvas.width, canvas.height);
+        let frame = ctx.getImageData(0,0,canvas.width,canvas.height);
+        frame = applyFilter(frame);
+        frame = stabilizeFrame(frame);
+        ringBuffer.push(frame);
+        if(ringBuffer.length > preFrames) ringBuffer.shift();
+    }, 1000/fps);
+})
+.catch(err => alert('Tidak bisa mengakses kamera.'));
+
+// Flash realistis
+function flashEffect() {
+    flash.style.opacity = 0.8;
+    flash.style.display = 'block';
+    setTimeout(() => flash.style.opacity = 0, 150);
+    setTimeout(() => flash.style.display = 'none', 300);
+}
+
+// Tombol ambil Live Photo
+captureButton.addEventListener('click', () => {
+    if(!player.srcObject) return;
+    flashEffect();
+
+    // --- GIF ---
+    const gif = new GIF({ workers: 2, quality: 10, width: canvas.width, height: canvas.height });
+
+    ringBuffer.forEach(frame => gif.addFrame(frame, { delay: 1000/fps }));
+
+    let framesAdded = 0;
+    const postInterval = setInterval(() => {
+        ctx.drawImage(player, 0, 0, canvas.width, canvas.height);
+        let frame = ctx.getImageData(0,0,canvas.width,canvas.height);
+        frame = applyFilter(frame);
+        frame = stabilizeFrame(frame);
+        gif.addFrame(frame, { delay: 1000/fps });
+        framesAdded++;
+        if(framesAdded >= postFrames) {
+            clearInterval(postInterval);
+            gif.on('finished', blob => {
+                const url = URL.createObjectURL(blob);
+                liveGIF.src = url;
+                liveGIF.style.display = 'block';
+                downloadBtn.style.display = 'inline-block';
+                downloadBtn.onclick = () => {
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'livephoto.gif';
+                    a.click();
+                };
+            });
+            gif.render();
+        }
+    }, 1000/fps);
+
+    // --- WebM mirip MP4 ---
+    const mediaRecorder = new MediaRecorder(player.srcObject, { mimeType: 'video/webm; codecs=vp8' });
+    let chunks = [];
+    mediaRecorder.ondataavailable = e => { if(e.data.size>0) chunks.push(e.data); };
+    mediaRecorder.onstop = () => {
+        const blob = new Blob(chunks, { type: 'video/webm' });
+        const url = URL.createObjectURL(blob);
+        livePhoto.src = url;
+        livePhoto.style.display = 'block';
+    };
+    mediaRecorder.start();
+    setTimeout(() => mediaRecorder.stop(), (preSeconds + postSeconds)*1000);
+});
+</script>
+</body>
+</html>
